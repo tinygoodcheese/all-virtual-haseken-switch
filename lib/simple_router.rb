@@ -24,6 +24,26 @@ class SimpleRouter < Trema::Controller
 
   def switch_ready(dpid)
     send_flow_mod_delete(dpid, match: Match.new)
+    ### modified by yyynishi
+    #if dpid == 3 then ## if physical switch
+    #  initialize_routing_table dpid
+    #end
+  end
+
+  def initialize_routing_table(dpid)
+    actions1 = [SetSourceMacAddress.new(Mac.new('00:00:00:00:03:01')),
+               SetDestinationMacAddress.new(Mac.new('00:00:00:00:01:03')),
+               SendOutPort.new(1)]
+    send_flow_mod_add(dpid,
+      match: Match.new(destination_ip_address: '192.168.1.1'),
+      actions: actions1)
+
+    actions2 = [SetSourceMacAddress.new(Mac.new('00:00:00:00:03:02')),
+               SetDestinationMacAddress.new(Mac.new('00:00:00:00:02:03')),
+               SendOutPort.new(2)]
+    send_flow_mod_add(dpid,
+      match: Match.new(destination_ip_address: '192.168.2.1'),
+      actions: actions2)
   end
 
   # rubocop:disable MethodLength
@@ -45,12 +65,10 @@ class SimpleRouter < Trema::Controller
 
   # rubocop:disable MethodLength
   def packet_in_arp_request(dpid, in_port, arp_request)
-###modified by tinygoodcheese
     interface = @interfaces.find_by(dpid: dpid,
                                     port_number: in_port,
                                     ip_address: arp_request.target_protocol_address)
-##      @interfaces.find_by(port_number: in_port,
-##                          ip_address: arp_request.target_protocol_address)
+
     return unless interface
     send_packet_out(
       dpid,
@@ -163,10 +181,22 @@ class SimpleRouter < Trema::Controller
   ##  print "dpid :", dpid ,"\n"
   ##  print "ip_type_of_service :", message.ip_type_of_service ,"\n"
   ##  print "next_hop :", next_hop ,"\n"
-  print "dpid:::",dpid,",",message.source_ip_address,"\n"
 
+
+  ### modified by yyynishi
+  if dpid != 3 then
       port = @users.find_by_user_id_and_ip(message.ip_type_of_service,
                                            next_hop).port_number
+    else
+      if message.source_ip_address == '192.168.1.1' then
+        port = 2
+      else
+        port = 1
+      end
+    end
+    #port = @users.find_by_user_id_and_ip(message.ip_type_of_service,
+                                           #next_hop).port_number
+###
 
       interface = @interfaces.find_by(dpid: dpid,
                                       port_number: port.to_i)
@@ -186,12 +216,17 @@ class SimpleRouter < Trema::Controller
       print "Destination IP: ", message.destination_ip_address , "\n"
       print "dpid:" , dpid , "\n"
   
+    ### modified by yyynishi
       ### modified by tinygoodcheese
-      if message.ip_type_of_service == 0x00 then
-       user_id = @users.find_by_ip_and_port(message.destination_ip_address,
-                                message.in_port).user_id.hex
-      else 
-       user_id = 0x00
+      if dpid != 3 then
+        if message.ip_type_of_service == 0x00 then
+         user_id = @users.find_by_ip_and_port(message.destination_ip_address,
+                                  message.in_port).user_id.hex
+        else 
+          user_id = 0x00
+        end
+      else
+        user_id = message.ip_type_of_service
       end
       actions = [Pio::OpenFlow10::SetTos.new(user_id),
                  SetSourceMacAddress.new(interface.mac_address),
@@ -261,15 +296,18 @@ class SimpleRouter < Trema::Controller
     @unresolved_packet_queue[destination_ip].each do |each|
     in_port = @unresolved_packet_port_queue[destination_ip][unsent_packet_number]
       ### modified by yyynishi
-  
-        if each.ip_type_of_service == 0x00 then
-      user_id = @users.find_by_ip_and_port(each.source_ip_address,
-                               in_port).user_id.hex
-    else 
-      
-      user_id  = 0x00
-
+    #print "!!!data:", each.source_mac,"\n"
+    if dpid != 3 then
+      if each.ip_type_of_service == 0x00 then
+         user_id = @users.find_by_ip_and_port(each.source_ip_address,
+                              in_port).user_id.hex
+      else 
+         user_id  = 0x00
+      end
+    else
+      user_id = each.ip_type_of_service
     end
+
 
       unsent_packet_number = unsent_packet_number + 1       
       
@@ -301,6 +339,7 @@ class SimpleRouter < Trema::Controller
   end
 
   def send_arp_request(dpid, destination_ip, interface)
+
     arp_request =
       Arp::Request.new(source_mac: interface.mac_address,
                        sender_protocol_address: interface.ip_address,
